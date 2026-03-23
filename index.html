@@ -1,0 +1,1380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LightRAG Knowledge Graph Explorer</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg-deep: #1A0D00;
+    --bg-panel: #241200;
+    --bg-card: #2E1800;
+    --bg-hover: #3A2000;
+    --gold: #DDC165;
+    --gold-light: #FFE9A3;
+    --orange: #E5591C;
+    --orange-dim: #B8440F;
+    --text: #C4A050;
+    --text-dim: #8A7040;
+    --text-bright: #FFF5D6;
+    --border: #3A2800;
+    --glow-gold: rgba(221, 193, 101, 0.4);
+    --glow-orange: rgba(229, 89, 28, 0.3);
+  }
+
+  body {
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    background: var(--bg-deep);
+    color: var(--text);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  /* Top bar */
+  .topbar {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: 48px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 16px;
+    padding: 0 16px;
+    z-index: 100;
+  }
+
+  .topbar .logo {
+    font-size: 14px; font-weight: 700;
+    color: var(--gold);
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+
+  .topbar .logo span { color: var(--orange); }
+
+  .search-box {
+    flex: 1; max-width: 320px;
+    background: var(--bg-deep);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: var(--gold-light);
+    font-family: inherit; font-size: 12px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .search-box:focus { border-color: var(--gold); }
+  .search-box::placeholder { color: var(--text-dim); }
+
+  .stats {
+    font-size: 11px; color: var(--text-dim);
+    white-space: nowrap;
+  }
+  .stats b { color: var(--gold); font-weight: 600; }
+
+  .topbar-actions {
+    display: flex; gap: 8px; margin-left: auto;
+  }
+
+  .btn {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: var(--gold);
+    font-family: inherit; font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+  .btn:hover { background: var(--bg-hover); border-color: var(--gold); }
+  .btn.primary { background: var(--orange); border-color: var(--orange); color: #fff; }
+  .btn.primary:hover { background: #cc4d15; }
+
+  /* Filter bar */
+  .filter-bar {
+    position: fixed; top: 48px; left: 0; right: 0;
+    height: 36px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 16px;
+    z-index: 99;
+    overflow-x: auto;
+  }
+
+  .filter-chip {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 3px 10px;
+    font-size: 10px; font-family: inherit;
+    color: var(--text);
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+  .filter-chip:hover { border-color: var(--gold); color: var(--gold); }
+  .filter-chip.active {
+    background: var(--orange);
+    border-color: var(--orange);
+    color: #fff;
+  }
+  .filter-chip .count {
+    color: var(--text-dim);
+    font-size: 9px;
+    margin-left: 4px;
+  }
+  .filter-chip.active .count { color: rgba(255,255,255,0.7); }
+
+  /* Graph canvas */
+  #graph-container {
+    position: fixed;
+    top: 84px; left: 0; right: 0; bottom: 0;
+  }
+
+  svg { width: 100%; height: 100%; }
+
+  /* Node styling */
+  .node-circle {
+    stroke-width: 2;
+    cursor: pointer;
+    transition: r 0.2s;
+  }
+
+  .node-label {
+    font-family: 'SF Mono', monospace;
+    fill: var(--text);
+    pointer-events: none;
+    text-anchor: middle;
+    dominant-baseline: central;
+  }
+
+  .edge-line {
+    stroke-linecap: round;
+  }
+
+  .edge-label {
+    font-family: 'SF Mono', monospace;
+    fill: var(--text-dim);
+    pointer-events: none;
+    text-anchor: middle;
+    font-size: 8px;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+
+  /* Detail panel */
+  .detail-panel {
+    position: fixed;
+    top: 84px; right: -420px; bottom: 0;
+    width: 400px;
+    background: var(--bg-panel);
+    border-left: 1px solid var(--border);
+    z-index: 50;
+    transition: right 0.3s ease;
+    overflow-y: auto;
+    padding: 20px;
+  }
+  .detail-panel.open { right: 0; }
+
+  .detail-panel .close-btn {
+    position: absolute; top: 12px; right: 12px;
+    background: none; border: none;
+    color: var(--text-dim); cursor: pointer;
+    font-size: 18px; line-height: 1;
+  }
+  .detail-panel .close-btn:hover { color: var(--gold); }
+
+  .detail-type {
+    font-size: 10px; text-transform: uppercase;
+    letter-spacing: 1.5px; color: var(--orange);
+    margin-bottom: 4px;
+  }
+  .detail-name {
+    font-size: 20px; font-weight: 700;
+    color: var(--gold-light);
+    margin-bottom: 12px;
+    line-height: 1.3;
+  }
+  .detail-desc {
+    font-size: 12px; line-height: 1.6;
+    color: var(--text);
+    margin-bottom: 20px;
+    padding: 12px;
+    background: var(--bg-deep);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+
+  .detail-section-title {
+    font-size: 10px; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--text-dim);
+    margin: 16px 0 8px;
+  }
+
+  .detail-connections {
+    list-style: none;
+  }
+  .detail-connections li {
+    padding: 8px 10px;
+    margin-bottom: 4px;
+    background: var(--bg-card);
+    border-radius: 6px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.2s;
+    border: 1px solid transparent;
+  }
+  .detail-connections li:hover {
+    background: var(--bg-hover);
+    border-color: var(--border);
+  }
+  .detail-connections .conn-name {
+    color: var(--gold);
+    font-weight: 600;
+  }
+  .detail-connections .conn-rel {
+    color: var(--text-dim);
+    font-size: 10px;
+    display: block;
+    margin-top: 2px;
+  }
+
+  .detail-meta {
+    font-size: 10px; color: var(--text-dim);
+    margin-top: 16px;
+  }
+  .detail-meta div { margin-bottom: 4px; }
+  .detail-meta span { color: var(--text); }
+
+  /* Drop zone overlay */
+  .drop-overlay {
+    position: fixed; inset: 0;
+    background: rgba(26, 13, 0, 0.92);
+    display: none;
+    align-items: center; justify-content: center;
+    z-index: 200;
+    flex-direction: column; gap: 16px;
+  }
+  .drop-overlay.active { display: flex; }
+  .drop-overlay .drop-icon {
+    width: 80px; height: 80px;
+    border: 3px dashed var(--gold);
+    border-radius: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 36px; color: var(--gold);
+  }
+  .drop-overlay .drop-text {
+    font-size: 16px; color: var(--gold-light);
+    font-weight: 600;
+  }
+  .drop-overlay .drop-sub {
+    font-size: 12px; color: var(--text-dim);
+  }
+
+  /* Welcome / empty state */
+  .welcome {
+    position: fixed; inset: 0;
+    top: 84px;
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 20px;
+    z-index: 10;
+    pointer-events: none;
+  }
+  .welcome.hidden { display: none; }
+  .welcome h2 {
+    font-size: 24px; color: var(--gold);
+    font-weight: 700;
+  }
+  .welcome p {
+    font-size: 13px; color: var(--text-dim);
+    max-width: 480px; text-align: center; line-height: 1.6;
+  }
+  .welcome .welcome-actions {
+    display: flex; gap: 12px;
+    pointer-events: all;
+  }
+  .welcome .format-list {
+    font-size: 11px; color: var(--text-dim);
+    text-align: center; line-height: 1.8;
+  }
+  .welcome .format-list code {
+    background: var(--bg-card);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--gold);
+    font-size: 10px;
+  }
+
+  /* Tooltip */
+  .tooltip {
+    position: fixed;
+    background: var(--bg-card);
+    border: 1px solid var(--gold);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 11px;
+    color: var(--text);
+    max-width: 280px;
+    pointer-events: none;
+    z-index: 300;
+    display: none;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5), 0 0 15px var(--glow-gold);
+  }
+  .tooltip .tt-name {
+    color: var(--gold-light);
+    font-weight: 700; font-size: 13px;
+    margin-bottom: 4px;
+  }
+  .tooltip .tt-type {
+    color: var(--orange);
+    font-size: 9px; text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+  }
+  .tooltip .tt-desc {
+    color: var(--text);
+    line-height: 1.4;
+  }
+
+  /* JSON/GraphML paste modal */
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(26, 13, 0, 0.85);
+    display: none; align-items: center; justify-content: center;
+    z-index: 250;
+  }
+  .modal-overlay.active { display: flex; }
+  .modal {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    width: 90%; max-width: 640px;
+    max-height: 80vh;
+  }
+  .modal h3 {
+    color: var(--gold); font-size: 16px;
+    margin-bottom: 12px;
+  }
+  .modal textarea {
+    width: 100%; height: 300px;
+    background: var(--bg-deep);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    color: var(--gold-light);
+    font-family: inherit; font-size: 12px;
+    resize: vertical; outline: none;
+  }
+  .modal textarea:focus { border-color: var(--gold); }
+  .modal textarea::placeholder { color: var(--text-dim); }
+  .modal .modal-actions {
+    display: flex; gap: 8px; justify-content: flex-end;
+    margin-top: 12px;
+  }
+  .modal .error-msg {
+    color: var(--orange); font-size: 11px;
+    margin-top: 8px; display: none;
+  }
+
+  /* Keyboard hints */
+  kbd {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg-deep); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+  /* SVG glow filters */
+  .glow-gold { filter: url(#glow-gold); }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <div class="logo">LightRAG <span>Explorer</span></div>
+  <input type="text" class="search-box" id="search" placeholder="Search entities... (/)">
+  <div class="stats" id="stats"></div>
+  <div class="topbar-actions">
+    <button class="btn" id="btn-paste" title="Paste JSON or GraphML">Paste Data</button>
+    <button class="btn" id="btn-load-file" title="Load file">Load File</button>
+    <button class="btn" id="btn-demo" title="Load demo data">Demo</button>
+    <button class="btn" id="btn-export" title="Export as PNG">Export PNG</button>
+  </div>
+</div>
+
+<!-- Filter bar -->
+<div class="filter-bar" id="filter-bar">
+  <div class="filter-chip active" data-type="all">All</div>
+</div>
+
+<!-- Graph -->
+<div id="graph-container"></div>
+
+<!-- Welcome -->
+<div class="welcome" id="welcome">
+  <h2>LightRAG Knowledge Graph Explorer</h2>
+  <p>Visualize entity-relationship graphs from <b style="color:var(--gold-light)">LightRAG</b> — the 30k-star RAG framework by HKUDS. Drop a file, paste JSON, or try the demo.</p>
+  <div class="welcome-actions">
+    <button class="btn primary" id="btn-welcome-demo">Load Demo Graph</button>
+    <button class="btn" id="btn-welcome-paste">Paste JSON / GraphML</button>
+    <button class="btn" id="btn-welcome-file">Load File</button>
+  </div>
+  <div class="format-list">
+    Supports: <code>KnowledgeGraph JSON</code> <code>custom_kg JSON</code> <code>GraphML</code> <code>nodes+edges JSON</code>
+  </div>
+</div>
+
+<!-- Detail panel -->
+<div class="detail-panel" id="detail-panel">
+  <button class="close-btn" id="close-detail">&times;</button>
+  <div id="detail-content"></div>
+</div>
+
+<!-- Tooltip -->
+<div class="tooltip" id="tooltip"></div>
+
+<!-- Drop overlay -->
+<div class="drop-overlay" id="drop-overlay">
+  <div class="drop-icon">&#8615;</div>
+  <div class="drop-text">Drop LightRAG graph file</div>
+  <div class="drop-sub">JSON or GraphML</div>
+</div>
+
+<!-- Paste modal -->
+<div class="modal-overlay" id="paste-modal">
+  <div class="modal">
+    <h3>Paste Graph Data</h3>
+    <textarea id="paste-input" placeholder='Paste LightRAG KnowledgeGraph JSON, custom_kg JSON, or GraphML XML here...'></textarea>
+    <div class="error-msg" id="paste-error"></div>
+    <div class="modal-actions">
+      <button class="btn" id="paste-cancel">Cancel</button>
+      <button class="btn primary" id="paste-load">Load Graph</button>
+    </div>
+  </div>
+</div>
+
+<!-- Hidden file input -->
+<input type="file" id="file-input" accept=".json,.graphml,.xml" style="display:none">
+
+<script>
+// ── State ──
+let graphData = { nodes: [], edges: [] };
+let simulation = null;
+let svg, g, linkGroup, nodeGroup, labelGroup;
+let activeFilters = new Set(['all']);
+let selectedNode = null;
+let zoom;
+
+// ── Entity type color map ──
+const typeColors = {
+  person: '#DDC165',
+  organization: '#E5591C',
+  location: '#7EC8E3',
+  event: '#A8E06C',
+  concept: '#C490D1',
+  method: '#E8A87C',
+  content: '#82D9A5',
+  data: '#6CB4EE',
+  artifact: '#F0C38E',
+  naturalobject: '#8FBC8F',
+  creature: '#DDA0DD',
+  default: '#DDC165'
+};
+
+function getTypeColor(type) {
+  if (!type) return typeColors.default;
+  const t = type.toLowerCase().replace(/\s+/g, '');
+  return typeColors[t] || typeColors.default;
+}
+
+// ── Parse LightRAG data formats ──
+function parseGraphData(raw) {
+  // Try JSON first
+  if (typeof raw === 'string') {
+    raw = raw.trim();
+    if (raw.startsWith('<') || raw.startsWith('<?xml')) {
+      return parseGraphML(raw);
+    }
+    try {
+      raw = JSON.parse(raw);
+    } catch (e) {
+      throw new Error('Invalid JSON: ' + e.message);
+    }
+  }
+
+  // KnowledgeGraph API format: { nodes: [...], edges: [...] }
+  if (raw.nodes && raw.edges && raw.nodes[0]?.labels) {
+    return parseKnowledgeGraphFormat(raw);
+  }
+
+  // custom_kg format: { entities: [...], relationships: [...] }
+  if (raw.entities && raw.relationships) {
+    return parseCustomKGFormat(raw);
+  }
+
+  // Simple nodes+edges format
+  if (raw.nodes && raw.edges) {
+    return parseSimpleFormat(raw);
+  }
+
+  throw new Error('Unrecognized format. Expected KnowledgeGraph JSON, custom_kg JSON, or GraphML.');
+}
+
+function parseKnowledgeGraphFormat(data) {
+  const nodes = data.nodes.map(n => ({
+    id: n.id,
+    type: n.properties?.entity_type || (n.labels?.[1]) || 'concept',
+    description: n.properties?.description || '',
+    source_id: n.properties?.source_id || '',
+    file_path: n.properties?.file_path || '',
+    created_at: n.properties?.created_at || null,
+  }));
+
+  const edges = data.edges.map(e => ({
+    source: e.source,
+    target: e.target,
+    weight: e.properties?.weight || 1,
+    description: e.properties?.description || '',
+    keywords: e.properties?.keywords || '',
+  }));
+
+  return { nodes, edges };
+}
+
+function parseCustomKGFormat(data) {
+  const nodes = data.entities.map(e => ({
+    id: e.entity_name,
+    type: e.entity_type || 'concept',
+    description: e.description || '',
+    source_id: e.source_id || '',
+    file_path: '',
+    created_at: null,
+  }));
+
+  const edges = data.relationships.map(r => ({
+    source: r.src_id,
+    target: r.tgt_id,
+    weight: r.weight || 1,
+    description: r.description || '',
+    keywords: r.keywords || '',
+  }));
+
+  return { nodes, edges };
+}
+
+function parseSimpleFormat(data) {
+  const nodes = data.nodes.map(n => ({
+    id: n.id || n.name || n.entity_name,
+    type: n.type || n.entity_type || 'concept',
+    description: n.description || '',
+    source_id: n.source_id || '',
+    file_path: n.file_path || '',
+    created_at: n.created_at || null,
+  }));
+
+  const edges = data.edges.map(e => ({
+    source: e.source || e.src_id || e.from,
+    target: e.target || e.tgt_id || e.to,
+    weight: e.weight || 1,
+    description: e.description || e.label || '',
+    keywords: e.keywords || '',
+  }));
+
+  return { nodes, edges };
+}
+
+function parseGraphML(xmlStr) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlStr, 'text/xml');
+
+  if (doc.querySelector('parsererror')) {
+    throw new Error('Invalid GraphML XML');
+  }
+
+  const graph = doc.querySelector('graph');
+  if (!graph) throw new Error('No <graph> element found in GraphML');
+
+  // Build key map
+  const keys = {};
+  doc.querySelectorAll('key').forEach(k => {
+    keys[k.getAttribute('id')] = {
+      name: k.getAttribute('attr.name'),
+      for: k.getAttribute('for'),
+    };
+  });
+
+  // Parse nodes
+  const nodes = [];
+  graph.querySelectorAll(':scope > node').forEach(n => {
+    const node = { id: n.getAttribute('id') };
+    n.querySelectorAll('data').forEach(d => {
+      const key = keys[d.getAttribute('key')];
+      if (key) node[key.name] = d.textContent;
+    });
+    nodes.push({
+      id: node.id || node.entity_id || '',
+      type: node.entity_type || 'concept',
+      description: node.description || '',
+      source_id: node.source_id || '',
+      file_path: node.file_path || '',
+      created_at: node.created_at ? parseInt(node.created_at) : null,
+    });
+  });
+
+  // Parse edges
+  const edges = [];
+  graph.querySelectorAll(':scope > edge').forEach(e => {
+    const edge = {
+      source: e.getAttribute('source'),
+      target: e.getAttribute('target'),
+    };
+    e.querySelectorAll('data').forEach(d => {
+      const key = keys[d.getAttribute('key')];
+      if (key) edge[key.name] = d.textContent;
+    });
+    edges.push({
+      source: edge.source,
+      target: edge.target,
+      weight: parseFloat(edge.weight) || 1,
+      description: edge.description || '',
+      keywords: edge.keywords || '',
+    });
+  });
+
+  return { nodes, edges };
+}
+
+// ── Demo data ──
+function generateDemoData() {
+  return {
+    entities: [
+      { entity_name: "LightRAG", entity_type: "Method", description: "A fast and lightweight RAG framework that combines graph-based and vector-based retrieval for enhanced LLM-powered knowledge querying. Published at EMNLP 2025 by HKUDS.", source_id: "paper-001" },
+      { entity_name: "HKUDS", entity_type: "Organization", description: "Hong Kong University Data Science Lab — the research group behind LightRAG, developing next-generation retrieval-augmented generation systems.", source_id: "paper-001" },
+      { entity_name: "Knowledge Graph", entity_type: "Concept", description: "A structured representation of entities and their relationships, extracted from documents by LightRAG's entity extraction pipeline using LLM-powered analysis.", source_id: "paper-001" },
+      { entity_name: "Entity Extraction", entity_type: "Method", description: "The NLP pipeline that identifies named entities (people, organizations, concepts) from raw text using large language models with structured output prompts.", source_id: "paper-001" },
+      { entity_name: "Vector Retrieval", entity_type: "Method", description: "Embedding-based similarity search that finds relevant document chunks by computing cosine similarity between query and chunk embeddings in high-dimensional space.", source_id: "paper-001" },
+      { entity_name: "Graph Retrieval", entity_type: "Method", description: "Traversal-based retrieval that navigates entity-relationship graphs to find contextually connected information, capturing multi-hop reasoning paths.", source_id: "paper-001" },
+      { entity_name: "Hybrid Mode", entity_type: "Concept", description: "LightRAG's combined retrieval strategy that merges results from both vector search and graph traversal, providing comprehensive context for LLM generation.", source_id: "paper-001" },
+      { entity_name: "EMNLP 2025", entity_type: "Event", description: "The 2025 Conference on Empirical Methods in Natural Language Processing, where LightRAG was published and presented to the academic community.", source_id: "paper-001" },
+      { entity_name: "NetworkX", entity_type: "Artifact", description: "Python library for graph data structures and algorithms. LightRAG uses it as the default backend for knowledge graph storage in GraphML format.", source_id: "code-001" },
+      { entity_name: "Neo4j", entity_type: "Artifact", description: "Native graph database that LightRAG supports as an alternative storage backend for production-scale knowledge graph deployments with ACID transactions.", source_id: "code-001" },
+      { entity_name: "GraphML", entity_type: "Data", description: "XML-based file format for graph data. LightRAG's default serialization format for knowledge graphs, storing entity nodes with type/description attributes and weighted relationship edges.", source_id: "code-001" },
+      { entity_name: "Nano Vectordb", entity_type: "Artifact", description: "Lightweight vector database used by LightRAG for local embedding storage, providing fast cosine similarity search without external infrastructure.", source_id: "code-001" },
+      { entity_name: "Document Chunking", entity_type: "Method", description: "The process of splitting input documents into overlapping text segments for parallel entity extraction and embedding generation.", source_id: "paper-001" },
+      { entity_name: "Retrieval-Augmented Generation", entity_type: "Concept", description: "The paradigm of augmenting LLM responses with retrieved contextual information from external knowledge sources, reducing hallucination and grounding outputs in facts.", source_id: "paper-001" },
+      { entity_name: "REST API", entity_type: "Artifact", description: "LightRAG's HTTP interface exposing /query, /insert, and /graphs endpoints for programmatic access to the RAG pipeline and knowledge graph.", source_id: "code-001" },
+      { entity_name: "Prompt Engineering", entity_type: "Method", description: "The technique of crafting structured prompts for LLMs to extract entities and relationships with consistent formatting, used extensively in LightRAG's extraction pipeline.", source_id: "paper-001" },
+      { entity_name: "Multi-hop Reasoning", entity_type: "Concept", description: "The ability to answer complex questions by traversing multiple relationship edges in the knowledge graph, connecting indirectly related entities through intermediate nodes.", source_id: "paper-001" },
+      { entity_name: "Community Detection", entity_type: "Method", description: "Graph clustering algorithm used to identify groups of densely connected entities, enabling community-level summarization for global query mode in LightRAG.", source_id: "paper-001" },
+      { entity_name: "OpenAI API", entity_type: "Artifact", description: "Default LLM provider integration in LightRAG for entity extraction and query response generation, supporting GPT-4 and other OpenAI models.", source_id: "code-001" },
+      { entity_name: "Ollama", entity_type: "Artifact", description: "Local LLM runtime supported by LightRAG for fully offline operation, running open-source models like Llama and Mistral without cloud API dependencies.", source_id: "code-001" },
+    ],
+    relationships: [
+      { src_id: "LightRAG", tgt_id: "HKUDS", description: "Developed by HKUDS research lab", keywords: "creator, developer", weight: 1.0, source_id: "paper-001" },
+      { src_id: "LightRAG", tgt_id: "Knowledge Graph", description: "Builds and queries knowledge graphs from documents", keywords: "core component, graph construction", weight: 1.0, source_id: "paper-001" },
+      { src_id: "LightRAG", tgt_id: "Entity Extraction", description: "Uses entity extraction to populate the knowledge graph", keywords: "pipeline, NLP", weight: 0.9, source_id: "paper-001" },
+      { src_id: "LightRAG", tgt_id: "Vector Retrieval", description: "Implements vector-based similarity search for chunk retrieval", keywords: "retrieval, embedding", weight: 0.9, source_id: "paper-001" },
+      { src_id: "LightRAG", tgt_id: "Graph Retrieval", description: "Implements graph traversal for relationship-aware retrieval", keywords: "retrieval, traversal", weight: 0.9, source_id: "paper-001" },
+      { src_id: "LightRAG", tgt_id: "Hybrid Mode", description: "Combines vector and graph retrieval in hybrid mode", keywords: "combined, strategy", weight: 0.85, source_id: "paper-001" },
+      { src_id: "LightRAG", tgt_id: "EMNLP 2025", description: "Published and presented at EMNLP 2025", keywords: "publication, conference", weight: 0.7, source_id: "paper-001" },
+      { src_id: "LightRAG", tgt_id: "REST API", description: "Exposes functionality through REST API endpoints", keywords: "interface, HTTP", weight: 0.8, source_id: "code-001" },
+      { src_id: "LightRAG", tgt_id: "Retrieval-Augmented Generation", description: "Is an implementation of the RAG paradigm", keywords: "paradigm, framework", weight: 0.95, source_id: "paper-001" },
+      { src_id: "Knowledge Graph", tgt_id: "NetworkX", description: "Default storage backend using NetworkX graphs", keywords: "storage, backend", weight: 0.8, source_id: "code-001" },
+      { src_id: "Knowledge Graph", tgt_id: "Neo4j", description: "Optional production storage backend", keywords: "storage, database", weight: 0.7, source_id: "code-001" },
+      { src_id: "Knowledge Graph", tgt_id: "GraphML", description: "Serialized to disk in GraphML format", keywords: "serialization, format", weight: 0.8, source_id: "code-001" },
+      { src_id: "Knowledge Graph", tgt_id: "Community Detection", description: "Uses community detection for entity clustering", keywords: "clustering, graph analysis", weight: 0.75, source_id: "paper-001" },
+      { src_id: "Entity Extraction", tgt_id: "Prompt Engineering", description: "Uses structured prompts for consistent extraction", keywords: "technique, NLP", weight: 0.8, source_id: "paper-001" },
+      { src_id: "Entity Extraction", tgt_id: "Document Chunking", description: "Operates on chunked document segments", keywords: "preprocessing, pipeline", weight: 0.85, source_id: "paper-001" },
+      { src_id: "Vector Retrieval", tgt_id: "Nano Vectordb", description: "Uses Nano Vectordb for local embedding storage", keywords: "storage, embedding", weight: 0.8, source_id: "code-001" },
+      { src_id: "Graph Retrieval", tgt_id: "Multi-hop Reasoning", description: "Enables multi-hop reasoning through graph traversal", keywords: "reasoning, traversal", weight: 0.85, source_id: "paper-001" },
+      { src_id: "Hybrid Mode", tgt_id: "Vector Retrieval", description: "Merges vector retrieval results", keywords: "combination, search", weight: 0.9, source_id: "paper-001" },
+      { src_id: "Hybrid Mode", tgt_id: "Graph Retrieval", description: "Merges graph retrieval results", keywords: "combination, traversal", weight: 0.9, source_id: "paper-001" },
+      { src_id: "LightRAG", tgt_id: "OpenAI API", description: "Default LLM provider for extraction and generation", keywords: "LLM, provider", weight: 0.7, source_id: "code-001" },
+      { src_id: "LightRAG", tgt_id: "Ollama", description: "Supports local LLM inference via Ollama", keywords: "local, offline", weight: 0.65, source_id: "code-001" },
+      { src_id: "LightRAG", tgt_id: "Document Chunking", description: "Chunks documents before processing", keywords: "preprocessing, pipeline", weight: 0.8, source_id: "paper-001" },
+      { src_id: "HKUDS", tgt_id: "EMNLP 2025", description: "Presented research at the conference", keywords: "academic, presentation", weight: 0.6, source_id: "paper-001" },
+    ],
+  };
+}
+
+// ── Initialize graph ──
+function initGraph() {
+  const container = document.getElementById('graph-container');
+  const { width, height } = container.getBoundingClientRect();
+
+  svg = d3.select('#graph-container')
+    .append('svg')
+    .attr('width', width)
+    .attr('height', height);
+
+  // Defs for glow filters
+  const defs = svg.append('defs');
+
+  // Gold glow
+  const glowGold = defs.append('filter').attr('id', 'glow-gold').attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%');
+  glowGold.append('feGaussianBlur').attr('stdDeviation', '4').attr('result', 'blur');
+  glowGold.append('feComposite').attr('in', 'SourceGraphic').attr('in2', 'blur').attr('operator', 'over');
+
+  // Orange glow
+  const glowOrange = defs.append('filter').attr('id', 'glow-orange').attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%');
+  glowOrange.append('feGaussianBlur').attr('stdDeviation', '6').attr('result', 'blur');
+  glowOrange.append('feComposite').attr('in', 'SourceGraphic').attr('in2', 'blur').attr('operator', 'over');
+
+  // Arrow markers
+  defs.append('marker')
+    .attr('id', 'arrowhead')
+    .attr('viewBox', '0 -5 10 10')
+    .attr('refX', 20)
+    .attr('refY', 0)
+    .attr('markerWidth', 6)
+    .attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path')
+    .attr('d', 'M0,-4L8,0L0,4')
+    .attr('fill', '#5A3A00');
+
+  // Groups
+  g = svg.append('g');
+  linkGroup = g.append('g').attr('class', 'links');
+  nodeGroup = g.append('g').attr('class', 'nodes');
+  labelGroup = g.append('g').attr('class', 'labels');
+
+  // Zoom
+  zoom = d3.zoom()
+    .scaleExtent([0.1, 8])
+    .on('zoom', (event) => {
+      g.attr('transform', event.transform);
+    });
+
+  svg.call(zoom);
+
+  // Center
+  svg.call(zoom.transform, d3.zoomIdentity.translate(width / 2, height / 2));
+}
+
+// ── Render graph ──
+function renderGraph(data) {
+  graphData = data;
+  document.getElementById('welcome').classList.add('hidden');
+
+  // Compute degree
+  const degreeMap = {};
+  data.nodes.forEach(n => degreeMap[n.id] = 0);
+  data.edges.forEach(e => {
+    degreeMap[e.source?.id || e.source] = (degreeMap[e.source?.id || e.source] || 0) + 1;
+    degreeMap[e.target?.id || e.target] = (degreeMap[e.target?.id || e.target] || 0) + 1;
+  });
+  data.nodes.forEach(n => n.degree = degreeMap[n.id] || 0);
+
+  // Max degree for sizing
+  const maxDeg = Math.max(1, ...data.nodes.map(n => n.degree));
+
+  // Build filter chips
+  buildFilterChips(data.nodes);
+
+  // Update stats
+  updateStats(data);
+
+  // Clear existing
+  linkGroup.selectAll('*').remove();
+  nodeGroup.selectAll('*').remove();
+  labelGroup.selectAll('*').remove();
+
+  // Edge lines
+  const links = linkGroup.selectAll('line')
+    .data(data.edges)
+    .enter()
+    .append('line')
+    .attr('class', 'edge-line')
+    .attr('stroke', d => {
+      const w = d.weight || 1;
+      const alpha = 0.15 + w * 0.25;
+      return `rgba(221, 193, 101, ${alpha})`;
+    })
+    .attr('stroke-width', d => 0.5 + (d.weight || 1) * 1.5);
+
+  // Edge labels (shown on hover)
+  const edgeLabels = labelGroup.selectAll('.edge-label')
+    .data(data.edges)
+    .enter()
+    .append('text')
+    .attr('class', 'edge-label')
+    .text(d => {
+      const desc = d.description || d.keywords || '';
+      return desc.length > 30 ? desc.slice(0, 28) + '...' : desc;
+    });
+
+  // Node circles
+  const nodes = nodeGroup.selectAll('circle')
+    .data(data.nodes)
+    .enter()
+    .append('circle')
+    .attr('class', 'node-circle')
+    .attr('r', d => 6 + (d.degree / maxDeg) * 18)
+    .attr('fill', d => getTypeColor(d.type))
+    .attr('stroke', d => {
+      const c = d3.color(getTypeColor(d.type));
+      return c ? c.brighter(0.5).toString() : '#FFE9A3';
+    })
+    .attr('fill-opacity', 0.85)
+    .style('filter', d => d.degree > maxDeg * 0.6 ? 'url(#glow-orange)' : 'url(#glow-gold)')
+    .call(d3.drag()
+      .on('start', dragStarted)
+      .on('drag', dragged)
+      .on('end', dragEnded))
+    .on('mouseover', nodeMouseOver)
+    .on('mousemove', nodeMouseMove)
+    .on('mouseout', nodeMouseOut)
+    .on('click', nodeClicked);
+
+  // Node labels (only for high-degree nodes or when zoomed in)
+  const nodeLabels = labelGroup.selectAll('.node-label')
+    .data(data.nodes)
+    .enter()
+    .append('text')
+    .attr('class', 'node-label')
+    .attr('font-size', d => Math.max(8, 6 + (d.degree / maxDeg) * 6))
+    .attr('dy', d => -(10 + (d.degree / maxDeg) * 18))
+    .text(d => d.id.length > 20 ? d.id.slice(0, 18) + '...' : d.id)
+    .style('opacity', d => d.degree >= maxDeg * 0.25 ? 1 : 0.5);
+
+  // Simulation
+  const container = document.getElementById('graph-container');
+  const { width, height } = container.getBoundingClientRect();
+
+  if (simulation) simulation.stop();
+
+  simulation = d3.forceSimulation(data.nodes)
+    .force('link', d3.forceLink(data.edges)
+      .id(d => d.id)
+      .distance(d => 80 + (1 - (d.weight || 0.5)) * 60)
+      .strength(d => 0.3 + (d.weight || 0.5) * 0.5))
+    .force('charge', d3.forceManyBody()
+      .strength(d => -100 - d.degree * 30)
+      .distanceMax(400))
+    .force('center', d3.forceCenter(0, 0))
+    .force('collision', d3.forceCollide()
+      .radius(d => 10 + (d.degree / maxDeg) * 20))
+    .on('tick', () => {
+      links
+        .attr('x1', d => d.source.x)
+        .attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x)
+        .attr('y2', d => d.target.y);
+
+      edgeLabels
+        .attr('x', d => (d.source.x + d.target.x) / 2)
+        .attr('y', d => (d.source.y + d.target.y) / 2);
+
+      nodes
+        .attr('cx', d => d.x)
+        .attr('cy', d => d.y);
+
+      nodeLabels
+        .attr('x', d => d.x)
+        .attr('y', d => d.y);
+    });
+
+  // Reset zoom to fit
+  svg.transition().duration(750).call(
+    zoom.transform,
+    d3.zoomIdentity.translate(width / 2, height / 2).scale(0.8)
+  );
+}
+
+// ── Filter chips ──
+function buildFilterChips(nodes) {
+  const typeCounts = {};
+  nodes.forEach(n => {
+    const t = (n.type || 'concept').toLowerCase();
+    typeCounts[t] = (typeCounts[t] || 0) + 1;
+  });
+
+  const bar = document.getElementById('filter-bar');
+  bar.innerHTML = '';
+
+  // All chip
+  const allChip = document.createElement('div');
+  allChip.className = 'filter-chip active';
+  allChip.dataset.type = 'all';
+  allChip.innerHTML = `All <span class="count">${nodes.length}</span>`;
+  allChip.onclick = () => toggleFilter('all');
+  bar.appendChild(allChip);
+
+  // Type chips sorted by count
+  Object.entries(typeCounts)
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([type, count]) => {
+      const chip = document.createElement('div');
+      chip.className = 'filter-chip';
+      chip.dataset.type = type;
+      chip.innerHTML = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${getTypeColor(type)};margin-right:4px;vertical-align:middle;"></span>${type} <span class="count">${count}</span>`;
+      chip.onclick = () => toggleFilter(type);
+      bar.appendChild(chip);
+    });
+}
+
+function toggleFilter(type) {
+  if (type === 'all') {
+    activeFilters = new Set(['all']);
+  } else {
+    activeFilters.delete('all');
+    if (activeFilters.has(type)) {
+      activeFilters.delete(type);
+      if (activeFilters.size === 0) activeFilters.add('all');
+    } else {
+      activeFilters.add(type);
+    }
+  }
+
+  // Update chip UI
+  document.querySelectorAll('.filter-chip').forEach(c => {
+    c.classList.toggle('active', activeFilters.has(c.dataset.type));
+  });
+
+  applyFilters();
+}
+
+function applyFilters() {
+  const showAll = activeFilters.has('all');
+
+  nodeGroup.selectAll('circle')
+    .transition().duration(300)
+    .attr('fill-opacity', d => {
+      if (showAll) return 0.85;
+      return activeFilters.has(d.type?.toLowerCase()) ? 0.85 : 0.08;
+    })
+    .attr('stroke-opacity', d => {
+      if (showAll) return 1;
+      return activeFilters.has(d.type?.toLowerCase()) ? 1 : 0.08;
+    });
+
+  labelGroup.selectAll('.node-label')
+    .transition().duration(300)
+    .style('opacity', d => {
+      const maxDeg = Math.max(1, ...graphData.nodes.map(n => n.degree));
+      const baseOpacity = d.degree >= maxDeg * 0.25 ? 1 : 0.5;
+      if (showAll) return baseOpacity;
+      return activeFilters.has(d.type?.toLowerCase()) ? baseOpacity : 0.05;
+    });
+
+  linkGroup.selectAll('line')
+    .transition().duration(300)
+    .style('opacity', d => {
+      if (showAll) return 1;
+      const sType = (typeof d.source === 'object' ? d.source.type : '').toLowerCase();
+      const tType = (typeof d.target === 'object' ? d.target.type : '').toLowerCase();
+      return (activeFilters.has(sType) || activeFilters.has(tType)) ? 1 : 0.05;
+    });
+}
+
+// ── Search ──
+function handleSearch(query) {
+  if (!query) {
+    nodeGroup.selectAll('circle')
+      .transition().duration(200)
+      .attr('fill-opacity', 0.85)
+      .attr('stroke-opacity', 1);
+    labelGroup.selectAll('.node-label')
+      .transition().duration(200)
+      .style('opacity', d => {
+        const maxDeg = Math.max(1, ...graphData.nodes.map(n => n.degree));
+        return d.degree >= maxDeg * 0.25 ? 1 : 0.5;
+      });
+    return;
+  }
+
+  const q = query.toLowerCase();
+
+  nodeGroup.selectAll('circle')
+    .transition().duration(200)
+    .attr('fill-opacity', d => d.id.toLowerCase().includes(q) ? 1 : 0.1)
+    .attr('stroke-opacity', d => d.id.toLowerCase().includes(q) ? 1 : 0.1);
+
+  labelGroup.selectAll('.node-label')
+    .transition().duration(200)
+    .style('opacity', d => d.id.toLowerCase().includes(q) ? 1 : 0.05);
+}
+
+// ── Node interactions ──
+function nodeMouseOver(event, d) {
+  const tooltip = document.getElementById('tooltip');
+  tooltip.innerHTML = `
+    <div class="tt-name">${escHtml(d.id)}</div>
+    <div class="tt-type">${escHtml(d.type || 'concept')}</div>
+    ${d.description ? `<div class="tt-desc">${escHtml(d.description.slice(0, 150))}${d.description.length > 150 ? '...' : ''}</div>` : ''}
+  `;
+  tooltip.style.display = 'block';
+
+  // Highlight connected edges
+  linkGroup.selectAll('line')
+    .transition().duration(150)
+    .style('opacity', e => {
+      const sId = e.source?.id || e.source;
+      const tId = e.target?.id || e.target;
+      return (sId === d.id || tId === d.id) ? 1 : 0.08;
+    })
+    .attr('stroke', e => {
+      const sId = e.source?.id || e.source;
+      const tId = e.target?.id || e.target;
+      return (sId === d.id || tId === d.id) ? '#DDC165' : `rgba(221, 193, 101, 0.15)`;
+    });
+
+  // Show edge labels for connected edges
+  labelGroup.selectAll('.edge-label')
+    .transition().duration(150)
+    .style('opacity', e => {
+      const sId = e.source?.id || e.source;
+      const tId = e.target?.id || e.target;
+      return (sId === d.id || tId === d.id) ? 0.8 : 0;
+    });
+
+  // Dim unconnected nodes
+  const connectedIds = new Set([d.id]);
+  graphData.edges.forEach(e => {
+    const sId = e.source?.id || e.source;
+    const tId = e.target?.id || e.target;
+    if (sId === d.id) connectedIds.add(tId);
+    if (tId === d.id) connectedIds.add(sId);
+  });
+
+  nodeGroup.selectAll('circle')
+    .transition().duration(150)
+    .attr('fill-opacity', n => connectedIds.has(n.id) ? 1 : 0.15);
+
+  labelGroup.selectAll('.node-label')
+    .transition().duration(150)
+    .style('opacity', n => connectedIds.has(n.id) ? 1 : 0.05);
+}
+
+function nodeMouseMove(event) {
+  const tooltip = document.getElementById('tooltip');
+  tooltip.style.left = (event.clientX + 16) + 'px';
+  tooltip.style.top = (event.clientY - 10) + 'px';
+}
+
+function nodeMouseOut() {
+  document.getElementById('tooltip').style.display = 'none';
+
+  // Reset
+  linkGroup.selectAll('line')
+    .transition().duration(300)
+    .style('opacity', 1)
+    .attr('stroke', d => {
+      const w = d.weight || 1;
+      const alpha = 0.15 + w * 0.25;
+      return `rgba(221, 193, 101, ${alpha})`;
+    });
+
+  labelGroup.selectAll('.edge-label')
+    .transition().duration(300)
+    .style('opacity', 0);
+
+  nodeGroup.selectAll('circle')
+    .transition().duration(300)
+    .attr('fill-opacity', 0.85);
+
+  const maxDeg = Math.max(1, ...graphData.nodes.map(n => n.degree));
+  labelGroup.selectAll('.node-label')
+    .transition().duration(300)
+    .style('opacity', d => d.degree >= maxDeg * 0.25 ? 1 : 0.5);
+
+  applyFilters();
+}
+
+function nodeClicked(event, d) {
+  event.stopPropagation();
+  selectedNode = d;
+  showDetailPanel(d);
+}
+
+// ── Detail panel ──
+function showDetailPanel(node) {
+  const panel = document.getElementById('detail-panel');
+  const content = document.getElementById('detail-content');
+
+  // Find connections
+  const connections = [];
+  graphData.edges.forEach(e => {
+    const sId = e.source?.id || e.source;
+    const tId = e.target?.id || e.target;
+    if (sId === node.id) {
+      connections.push({ node: tId, description: e.description, keywords: e.keywords, weight: e.weight, direction: 'outgoing' });
+    } else if (tId === node.id) {
+      connections.push({ node: sId, description: e.description, keywords: e.keywords, weight: e.weight, direction: 'incoming' });
+    }
+  });
+
+  connections.sort((a, b) => (b.weight || 0) - (a.weight || 0));
+
+  const sourceParts = (node.source_id || '').split('<SEP>').filter(Boolean);
+  const fileParts = (node.file_path || '').split('<SEP>').filter(Boolean);
+
+  content.innerHTML = `
+    <div class="detail-type">${escHtml(node.type || 'concept')}</div>
+    <div class="detail-name">${escHtml(node.id)}</div>
+    ${node.description ? `<div class="detail-desc">${escHtml(node.description)}</div>` : ''}
+    <div class="detail-section-title">Connections (${connections.length})</div>
+    <ul class="detail-connections">
+      ${connections.map(c => `
+        <li onclick="navigateToNode('${escAttr(c.node)}')">
+          <span class="conn-name">${escHtml(c.node)}</span>
+          <span class="conn-rel">${c.direction === 'outgoing' ? '→' : '←'} ${escHtml(c.description || c.keywords || 'related')}</span>
+        </li>
+      `).join('')}
+    </ul>
+    ${(sourceParts.length > 0 || fileParts.length > 0 || node.created_at) ? `
+    <div class="detail-section-title">Metadata</div>
+    <div class="detail-meta">
+      ${sourceParts.length > 0 ? `<div>Sources: <span>${sourceParts.map(s => escHtml(s)).join(', ')}</span></div>` : ''}
+      ${fileParts.length > 0 ? `<div>Files: <span>${fileParts.map(f => escHtml(f)).join(', ')}</span></div>` : ''}
+      ${node.created_at ? `<div>Created: <span>${new Date(node.created_at * 1000).toLocaleDateString()}</span></div>` : ''}
+    </div>` : ''}
+  `;
+
+  panel.classList.add('open');
+}
+
+function navigateToNode(nodeId) {
+  const node = graphData.nodes.find(n => n.id === nodeId);
+  if (!node) return;
+
+  selectedNode = node;
+  showDetailPanel(node);
+
+  // Pan to node
+  const container = document.getElementById('graph-container');
+  const { width, height } = container.getBoundingClientRect();
+  const transform = d3.zoomTransform(svg.node());
+  const scale = transform.k;
+
+  svg.transition().duration(500).call(
+    zoom.transform,
+    d3.zoomIdentity
+      .translate(width / 2 - node.x * scale, height / 2 - node.y * scale)
+      .scale(scale)
+  );
+
+  // Highlight the node
+  nodeGroup.selectAll('circle')
+    .transition().duration(300)
+    .attr('fill-opacity', d => d.id === nodeId ? 1 : 0.3)
+    .attr('r', d => {
+      const maxDeg = Math.max(1, ...graphData.nodes.map(n => n.degree));
+      const baseR = 6 + (d.degree / maxDeg) * 18;
+      return d.id === nodeId ? baseR * 1.3 : baseR;
+    });
+
+  setTimeout(() => {
+    nodeGroup.selectAll('circle')
+      .transition().duration(500)
+      .attr('fill-opacity', 0.85)
+      .attr('r', d => {
+        const maxDeg = Math.max(1, ...graphData.nodes.map(n => n.degree));
+        return 6 + (d.degree / maxDeg) * 18;
+      });
+  }, 800);
+}
+
+// ── Drag ──
+function dragStarted(event, d) {
+  if (!event.active) simulation.alphaTarget(0.3).restart();
+  d.fx = d.x;
+  d.fy = d.y;
+}
+
+function dragged(event, d) {
+  d.fx = event.x;
+  d.fy = event.y;
+}
+
+function dragEnded(event, d) {
+  if (!event.active) simulation.alphaTarget(0);
+  d.fx = null;
+  d.fy = null;
+}
+
+// ── Stats ──
+function updateStats(data) {
+  const types = new Set(data.nodes.map(n => n.type?.toLowerCase()));
+  document.getElementById('stats').innerHTML =
+    `<b>${data.nodes.length}</b> entities &middot; <b>${data.edges.length}</b> relationships &middot; <b>${types.size}</b> types`;
+}
+
+// ── Export PNG ──
+function exportPNG() {
+  const svgEl = svg.node();
+  const { width, height } = svgEl.getBoundingClientRect();
+  const svgData = new XMLSerializer().serializeToString(svgEl);
+  const canvas = document.createElement('canvas');
+  canvas.width = width * 2;
+  canvas.height = height * 2;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(2, 2);
+  ctx.fillStyle = '#1A0D00';
+  ctx.fillRect(0, 0, width, height);
+
+  const img = new Image();
+  img.onload = () => {
+    ctx.drawImage(img, 0, 0, width, height);
+    const a = document.createElement('a');
+    a.download = 'lightrag-graph.png';
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+  };
+  img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+}
+
+// ── Utilities ──
+function escHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s || '';
+  return div.innerHTML;
+}
+
+function escAttr(s) {
+  return (s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+// ── File & paste handling ──
+function handleFileLoad(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = parseGraphData(e.target.result);
+      renderGraph(data);
+    } catch (err) {
+      alert('Error parsing file: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ── Event listeners ──
+document.addEventListener('DOMContentLoaded', () => {
+  initGraph();
+
+  // Search
+  const searchBox = document.getElementById('search');
+  searchBox.addEventListener('input', (e) => handleSearch(e.target.value));
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && document.activeElement !== searchBox) {
+      e.preventDefault();
+      searchBox.focus();
+    }
+    if (e.key === 'Escape') {
+      searchBox.blur();
+      searchBox.value = '';
+      handleSearch('');
+      document.getElementById('detail-panel').classList.remove('open');
+      document.getElementById('paste-modal').classList.remove('active');
+    }
+  });
+
+  // Demo button
+  const loadDemo = () => {
+    const data = parseGraphData(generateDemoData());
+    renderGraph(data);
+  };
+  document.getElementById('btn-demo').addEventListener('click', loadDemo);
+  document.getElementById('btn-welcome-demo').addEventListener('click', loadDemo);
+
+  // Paste modal
+  const openPaste = () => {
+    document.getElementById('paste-modal').classList.add('active');
+    document.getElementById('paste-input').value = '';
+    document.getElementById('paste-error').style.display = 'none';
+    document.getElementById('paste-input').focus();
+  };
+  document.getElementById('btn-paste').addEventListener('click', openPaste);
+  document.getElementById('btn-welcome-paste').addEventListener('click', openPaste);
+  document.getElementById('paste-cancel').addEventListener('click', () => {
+    document.getElementById('paste-modal').classList.remove('active');
+  });
+  document.getElementById('paste-load').addEventListener('click', () => {
+    const val = document.getElementById('paste-input').value.trim();
+    if (!val) return;
+    try {
+      const data = parseGraphData(val);
+      renderGraph(data);
+      document.getElementById('paste-modal').classList.remove('active');
+    } catch (err) {
+      const errEl = document.getElementById('paste-error');
+      errEl.textContent = err.message;
+      errEl.style.display = 'block';
+    }
+  });
+
+  // File input
+  const fileInput = document.getElementById('file-input');
+  const openFile = () => fileInput.click();
+  document.getElementById('btn-load-file').addEventListener('click', openFile);
+  document.getElementById('btn-welcome-file').addEventListener('click', openFile);
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files[0]) handleFileLoad(e.target.files[0]);
+    e.target.value = '';
+  });
+
+  // Export
+  document.getElementById('btn-export').addEventListener('click', exportPNG);
+
+  // Close detail panel
+  document.getElementById('close-detail').addEventListener('click', () => {
+    document.getElementById('detail-panel').classList.remove('open');
+  });
+
+  // Click on background to close detail
+  svg.on('click', () => {
+    document.getElementById('detail-panel').classList.remove('open');
+  });
+
+  // Drag and drop
+  const overlay = document.getElementById('drop-overlay');
+  let dragCounter = 0;
+  document.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    dragCounter++;
+    overlay.classList.add('active');
+  });
+  document.addEventListener('dragleave', (e) => {
+    dragCounter--;
+    if (dragCounter <= 0) {
+      overlay.classList.remove('active');
+      dragCounter = 0;
+    }
+  });
+  document.addEventListener('dragover', (e) => e.preventDefault());
+  document.addEventListener('drop', (e) => {
+    e.preventDefault();
+    overlay.classList.remove('active');
+    dragCounter = 0;
+    const file = e.dataTransfer.files[0];
+    if (file) handleFileLoad(file);
+  });
+
+  // Resize
+  window.addEventListener('resize', () => {
+    const container = document.getElementById('graph-container');
+    const { width, height } = container.getBoundingClientRect();
+    svg.attr('width', width).attr('height', height);
+  });
+});
+</script>
+</body>
+</html>
